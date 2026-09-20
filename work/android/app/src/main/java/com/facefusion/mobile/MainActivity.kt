@@ -49,8 +49,12 @@ private const val KEEP_ORIGINAL = -1
 
 class MainActivity : ComponentActivity() {
 
-    /** One face the user has picked. [thumb] is the decode the pane and the row draw. */
-    private data class SourceItem(val uri: Uri, val thumb: Bitmap)
+    /** One named identity, backed by one or more persistent source photographs. */
+    private data class SourceItem(val profile: IdentityProfile, val thumb: Bitmap) {
+        val uri: Uri get() = profile.views.first()
+        val views: List<Uri> get() = profile.views
+        val name: String get() = profile.name
+    }
 
     /**
      * EVERY source face, shared by both screens, in the order the native slots hold them.
@@ -69,6 +73,10 @@ class MainActivity : ComponentActivity() {
     private var sources by mutableStateOf<List<SourceItem>>(emptyList())
     private var swapSourceIndex by mutableIntStateOf(0)
     private var liveSourceIndex by mutableIntStateOf(0)
+    /** Last automatic identity consistency warning, shown without poisoning the fusion. */
+    private var identityWarning by mutableStateOf<String?>(null)
+
+    private fun persistSources() = IdentityStore.save(this, sources.map { it.profile })
 
     /**
      * What the SWAP pane is showing: whichever source that screen is pointing at.
@@ -553,13 +561,17 @@ class MainActivity : ComponentActivity() {
      * caller is told, because a picker that visibly does nothing is the bug report.
      */
     private fun addToSources(uri: Uri): Int? {
-        val existing = sources.indexOfFirst { it.uri == uri }
-        if (existing >= 0) return existing
-        val thumb = decodeOriented(uri) ?: run {
+        val profile = IdentityStore.create(this, uri, "Identity ${sources.size + 1}") ?: run {
             status = getString(R.string.status_cannot_read_source)
             return null
         }
-        sources = sources + SourceItem(uri, thumb)
+        val thumb = decodeOriented(profile.views.first()) ?: run {
+            IdentityStore.delete(profile)
+            status = getString(R.string.status_cannot_read_source)
+            return null
+        }
+        sources = sources + SourceItem(profile, thumb)
+        persistSources()
         return sources.lastIndex
     }
 
@@ -575,7 +587,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun removeSource(index: Int) {
         if (index !in sources.indices) return
+        IdentityStore.delete(sources[index].profile)
         sources = sources.filterIndexed { i, _ -> i != index }
+        persistSources()
         swapPersonAssignments = swapPersonAssignments.mapNotNull { (person, slot) ->
             when {
                 slot == index -> null
@@ -599,6 +613,7 @@ class MainActivity : ComponentActivity() {
     private class PreparedSources(
         val bitmaps: List<Bitmap>,
         val slots: List<PreviewEngine.SourceSlot>,
+        val profileViews: List<List<PreviewEngine.SourceSlot>>,
     )
 
     /**
@@ -610,16 +625,57 @@ class MainActivity : ComponentActivity() {
      */
     private fun prepareSources(): PreparedSources? {
         if (sources.isEmpty()) return null
-        val bitmaps = sources.map { decodeOriented(it.uri) ?: return null }
-        val slots = sources.zip(bitmaps).map { (item, bmp) ->
+        val profileBitmaps = sources.map { item ->
+            item.views.map { decodeOriented(it) ?: return null }
+        }
+        fun slot(uri: Uri, bmp: Bitmap): PreviewEngine.SourceSlot? {
             val soft = bmp.asArgb8888() ?: return null
             val px = IntArray(soft.width * soft.height)
             soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
-            PreviewEngine.SourceSlot(
-                item.uri, NativePipe.argbToBgr(px, soft.width, soft.height),
+            return PreviewEngine.SourceSlot(
+                uri, NativePipe.argbToBgr(px, soft.width, soft.height),
                 soft.width, soft.height)
         }
-        return PreparedSources(bitmaps, slots)
+        val profileViews = sources.zip(profileBitmaps).map { (item, bmps) ->
+            item.views.zip(bmps).map { (uri, bmp) -> slot(uri, bmp) ?: return null }
+        }
+        return PreparedSources(
+            profileBitmaps.flatten(), profileViews.map { it.first() }, profileViews)
+    }
+
+    /** Add a photograph to the selected identity. Fusion occurs when the pipeline loads. */
+    private fun addIdentityView(index: Int, uri: Uri) {
+        val old = sources.getOrNull(index) ?: return
+        val updated = IdentityStore.addView(this, old.profile, uri) ?: run {
+            identityWarning = getString(R.string.status_cannot_read_source); return
+        }
+        sources = sources.toMutableList().also { it[index] = old.copy(profile = updated) }
+        persistSources()
+        identityWarning = getString(R.string.identity_view_added, updated.views.size)
+        previewOptionsChanged()
+    }
+
+    private fun renameIdentity(index: Int, name: String) {
+        val old = sources.getOrNull(index) ?: return
+        val clean = name.trim().take(40)
+        if (clean.isEmpty()) return
+        sources = sources.toMutableList().also {
+            it[index] = old.copy(profile = old.profile.copy(name = clean))
+        }
+        persistSources()
+    }
+
+    private var pendingIdentityViewIndex = -1
+    private val pickIdentityView = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val index = pendingIdentityViewIndex
+        pendingIdentityViewIndex = -1
+        if (uri != null && index in sources.indices) addIdentityView(index, uri)
+    }
+
+    private fun requestIdentityView(index: Int) {
+        if (liveRunning || index !in sources.indices) return
+        pendingIdentityViewIndex = index
+        pickIdentityView.launch("image/*")
     }
 
     /**
@@ -656,6 +712,21 @@ class MainActivity : ComponentActivity() {
             if (NativePipe.addSource(slot.bgr, slot.width, slot.height) < 0)
                 return "source ${i + 1}: ${NativePipe.lastError()}"
         }
+        val rejected = mutableListOf<String>()
+        for ((identityIndex, views) in prepared.profileViews.withIndex()) {
+            for ((viewIndex, view) in views.drop(1).withIndex()) {
+                val distance = NativePipe.addSourceView(
+                    identityIndex, view.bgr, view.width, view.height, 0.35f)
+                when {
+                    distance < 0f -> return "${sources[identityIndex].name}, photo ${viewIndex + 2}: " +
+                        NativePipe.lastError()
+                    distance > 0.35f -> rejected +=
+                        "${sources[identityIndex].name} photo ${viewIndex + 2}"
+                }
+            }
+        }
+        identityWarning = if (rejected.isEmpty()) null else
+            getString(R.string.identity_mismatch, rejected.joinToString(", "))
         NativePipe.setActiveSource(swapSourceIndex.coerceIn(0, prepared.slots.lastIndex))
         NativePipe.setFaceAssignEnabled(swapAssignMode)
         return null
@@ -829,18 +900,16 @@ class MainActivity : ComponentActivity() {
      * nothing is registered yet and startLive's loop is still the check.
      */
     private fun addLiveSource(uri: Uri) {
-        val already = sources.indexOfFirst { it.uri == uri }
-        if (already >= 0) { selectLiveSource(already); return }
-        // ONE decode, two uses: the thumbnail stored for the pane and the pixels handed
-        // to the pipeline are the same image -- a second decode is a full-size allocation
-        // that produces nothing new.
-        val bmp = decodeOriented(uri) ?: run {
+        if (!liveRunning) {
+            addToSources(uri)?.let { liveSourceIndex = it }
+            return
+        }
+        val profile = IdentityStore.create(this, uri, "Identity ${sources.size + 1}") ?: run {
             liveNote = getString(R.string.status_cannot_read_source); return
         }
-        if (!liveRunning) {
-            sources = sources + SourceItem(uri, bmp)
-            liveSourceIndex = sources.lastIndex
-            return
+        val bmp = decodeOriented(profile.views.first()) ?: run {
+            IdentityStore.delete(profile)
+            liveNote = getString(R.string.status_cannot_read_source); return
         }
         lifecycleScope.launch {
             val soft = bmp.asArgb8888()
@@ -857,8 +926,11 @@ class MainActivity : ComponentActivity() {
                     getString(R.string.status_no_face)
                 else null
             }
-            if (refusal != null) { liveNote = refusal; return@launch }
-            sources = sources + SourceItem(uri, bmp)
+            if (refusal != null) {
+                IdentityStore.delete(profile); liveNote = refusal; return@launch
+            }
+            sources = sources + SourceItem(profile, bmp)
+            persistSources()
             selectLiveSource(sources.lastIndex)
         }
     }
@@ -1216,6 +1288,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         BugReport.install(this)
         NativePipe.ensureLoaded()
+        // Named identities live in app-private storage and survive process death/updates.
+        sources = IdentityStore.load(this).mapNotNull { profile ->
+            decodeOriented(profile.views.firstOrNull() ?: return@mapNotNull null)?.let {
+                SourceItem(profile, it)
+            }
+        }
         // BEFORE the first probe, and that ordering is the whole point: ModelPaths caches
         // the backend and the tier chain on first ask, so a runtime pinned in Settings and
         // applied any later would be ignored for the life of the process.
@@ -1479,6 +1557,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Swap -> SwapScreen(
                                 sourceThumb = sourceThumb,
                                 sourceThumbs = sources.map { it.thumb },
+                                sourceNames = sources.map { it.name },
                                 activeSource = swapSourceIndex,
                                 onSelectSource = ::selectSwapSource,
                                 assignMode = swapAssignMode,
@@ -1650,12 +1729,16 @@ class MainActivity : ComponentActivity() {
                             Screen.Live -> LiveScreen(
                                 sourceThumb = sources.getOrNull(liveSourceIndex)?.thumb,
                                 sourceThumbs = sources.map { it.thumb },
+                                sourceNames = sources.map { it.name },
                                 sourceCount = sources.size,
                                 activeSource = liveSourceIndex,
                                 onSelectSource = ::selectLiveSource,
                                 onPickSource = ::pickLiveSource,
                                 onClearSource = ::clearLiveSource,
                                 onCaptureSource = { capture(video = false, forSource = true) },
+                                onAddIdentityView = ::requestIdentityView,
+                                onRenameIdentity = ::renameIdentity,
+                                identityWarning = identityWarning,
                                 frame = liveFrame,
                                 running = liveRunning,
                                 onToggleRun = { toggleLive() },
@@ -2513,8 +2596,15 @@ class MainActivity : ComponentActivity() {
                     val err = previews.ensureReady(
                         lib, models.absolutePath, opts,
                         slots = prepared.slots,
+                        identityViews = prepared.profileViews,
                         activeSource = swapSourceIndex,
                         assignEnabled = swapAssignMode,
+                        onRejectedView = { identity, view, _ ->
+                            identityWarning = getString(
+                                R.string.identity_mismatch,
+                                "${sources.getOrNull(identity)?.name ?: "Identity ${identity + 1}"} " +
+                                    "photo ${view + 1}")
+                        },
                         // The same check runSwap makes, over the same list. Without it the
                         // preview is a complete second processing path with no check on
                         // it, and the check becomes avoidable by never pressing Swap.
@@ -3492,28 +3582,9 @@ class MainActivity : ComponentActivity() {
                 if (!NativePipe.init(libDir, libDir, models.absolutePath, opts))
                     return@withContext "init: ${NativePipe.lastError()}"
                 NativePipe.setTrackPeriod(opts.trackPeriod)
-                // EVERY source is registered, in list order, so the native slots stay
-                // aligned with the chips. The first version registered only the ACTIVE
-                // one, which made `setActiveSource(i)` point at the wrong slot -- or at
-                // nowhere at all -- as soon as the list held more than one face.
-                // Each one is gated too: a face the user can switch to mid-run must not
-                // be the one input the gate never saw.
-                for ((i, ls) in sources.withIndex()) {
-                    val bmp = decodeOriented(ls.uri)
-                        ?: return@withContext "cannot read source ${i + 1}"
-                    val verdict = ContentGate.checkImage(bmp)
-                    if (!verdict.ok)
-                        return@withContext ContentGate.message(
-                            this@MainActivity, R.string.gate_subject_source_image, verdict)
-                    val soft = bmp.asArgb8888()
-                    val px = IntArray(soft.width * soft.height)
-                    soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
-                    val bgr = NativePipe.argbToBgr(px, soft.width, soft.height)
-                    val okOne = if (i == 0)
-                                    NativePipe.setSource(bgr, soft.width, soft.height)
-                                else NativePipe.addSource(bgr, soft.width, soft.height) >= 0
-                    if (!okOne) return@withContext "no face in source ${i + 1}"
-                }
+                val prepared = prepareSources() ?: return@withContext "cannot read identity photos"
+                gateSources(prepared.bitmaps, "live")?.let { return@withContext it }
+                registerSources(prepared)?.let { return@withContext it }
                 // A fresh pipeline defaults swapEnabled to true; the switch can be OFF
                 // before the pump ever ran, so the UI's value is pushed onto it here.
                 // setActiveSource restores the chip the user had selected; the assignment
@@ -4019,21 +4090,12 @@ class MainActivity : ComponentActivity() {
                     if (!ok) error("init: " + NativePipe.lastError())
 
                     status = getString(R.string.status_reading_source)
-                    val bmp = decodeOriented(src) ?: error("cannot decode source image")
+                    val prepared = prepareSources() ?: error("cannot decode identity photos")
                     status = getString(R.string.status_content_check)
-                    ContentGate.checkImage(bmp).let {
-                        appendLog("source content score %+.3f".format(it.score))
-                        if (!it.ok) throw ContentGate.Refused(
-                            ContentGate.message(this@MainActivity,
-                                                R.string.gate_subject_source_image, it))
+                    gateSources(prepared.bitmaps, "batch")?.let {
+                        throw ContentGate.Refused(it)
                     }
-                    val soft = bmp.asArgb8888()
-                    val px = IntArray(soft.width * soft.height)
-                    soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
-                    if (!NativePipe.setSource(
-                            NativePipe.argbToBgr(px, soft.width, soft.height),
-                            soft.width, soft.height))
-                        error("source: " + NativePipe.lastError())
+                    registerSources(prepared)?.let { error(it) }
                     appendLog("source ready for " + batchQueue.size + " clips")
                 }
             }

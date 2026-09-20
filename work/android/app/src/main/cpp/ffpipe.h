@@ -222,6 +222,11 @@ class Pipeline {
 
   bool setSource(const ffcv::Image& sourceImage);
   int addSource(const ffcv::Image& sourceImage);
+  // Add another photograph to an existing identity slot. Returns cosine distance from
+  // the current fused identity; a value above maxDistance is rejected and not fused.
+  // Negative means analysis failed.
+  float addSourceView(int sourceIndex, const ffcv::Image& sourceImage,
+                      float maxDistance = 0.35f);
   void clearSourceSlots();
   void setActiveSource(int index);
   /**

@@ -179,6 +179,8 @@ struct Pipeline::Impl {
     int id = 0;       // stable identity across erases/reorders (see selectedId)
   };
   std::vector<TrackedFace> tracked;
+  // Number of accepted photographs folded into each sourceSlots entry.
+  std::vector<int> sourceViewCounts;
   int nextTrackedId = 1;
   // The SELECTED person (assign mode): the last one tapped. They follow the source
   // chip until an empty tap deselects them. Stored by id, not index: tracked entries
@@ -1023,9 +1025,11 @@ bool Pipeline::setSource(const ffcv::Image& img) {
   std::memcpy(p_->srcEmbedding, best->embedding, sizeof(p_->srcEmbedding));
   std::memcpy(p_->srcEmbeddingNorm, best->embeddingNorm, sizeof(p_->srcEmbeddingNorm));
   p_->sourceSlots.clear();
+  p_->sourceViewCounts.clear();
   std::array<float, 512> slot{};
   std::memcpy(slot.data(), best->embeddingNorm, sizeof(float) * 512);
   p_->sourceSlots.push_back(slot);
+  p_->sourceViewCounts.push_back(1);
   p_->activeSource = 0;
   p_->faceAssignments.clear();
   p_->tracked.clear(); p_->frameSources.clear(); p_->frameSourcesValid = false;
@@ -1059,6 +1063,7 @@ int Pipeline::addSource(const ffcv::Image& img) {
   std::array<float, 512> slot{};
   std::memcpy(slot.data(), best->embeddingNorm, sizeof(float) * 512);
   p_->sourceSlots.push_back(slot);
+  p_->sourceViewCounts.push_back(1);
   if (!p_->haveSource) {
     std::memcpy(p_->srcEmbeddingNorm, slot.data(), sizeof(float) * 512);
     std::memcpy(p_->srcEmbedding, best->embedding, sizeof(p_->srcEmbedding));
@@ -1067,8 +1072,48 @@ int Pipeline::addSource(const ffcv::Image& img) {
   return (int)p_->sourceSlots.size() - 1;
 }
 
+float Pipeline::addSourceView(int sourceIndex, const ffcv::Image& img, float maxDistance) {
+  err_.clear();
+  if (!p_ || sourceIndex < 0 || sourceIndex >= (int)p_->sourceSlots.size()) {
+    err_ = "identity slot out of range"; return -1.f;
+  }
+  auto faces = analyse(img, /*boxesOnly=*/false, /*noTrack=*/true);
+  if (faces.empty()) {
+    if (err_.empty()) err_ = "no face detected in identity photo";
+    return -1.f;
+  }
+  const Face* best = &faces[0]; float area = -1.f;
+  for (const auto& f : faces) {
+    const float a = (f.box[2] - f.box[0]) * (f.box[3] - f.box[1]);
+    if (a > area) { area = a; best = &f; }
+  }
+  auto& fused = p_->sourceSlots[(size_t)sourceIndex];
+  double dot = 0;
+  for (int i = 0; i < 512; ++i) dot += (double)fused[(size_t)i] * best->embeddingNorm[i];
+  const float distance = 1.f - (float)dot;
+  if (distance > maxDistance) return distance;
+
+  int count = 1;
+  if (sourceIndex < (int)p_->sourceViewCounts.size())
+    count = std::max(1, p_->sourceViewCounts[(size_t)sourceIndex]);
+  double norm = 0;
+  for (int i = 0; i < 512; ++i) {
+    fused[(size_t)i] = (fused[(size_t)i] * count + best->embeddingNorm[i]) / (count + 1);
+    norm += (double)fused[(size_t)i] * fused[(size_t)i];
+  }
+  norm = std::sqrt(norm);
+  if (norm > 0) for (float& v : fused) v = (float)(v / norm);
+  if (sourceIndex >= (int)p_->sourceViewCounts.size())
+    p_->sourceViewCounts.resize(p_->sourceSlots.size(), 1);
+  p_->sourceViewCounts[(size_t)sourceIndex] = count + 1;
+  if (sourceIndex == 0) {
+    std::memcpy(p_->srcEmbeddingNorm, fused.data(), sizeof(float) * 512);
+  }
+  return distance;
+}
+
 void Pipeline::clearSourceSlots() {
-  p_->sourceSlots.clear(); p_->faceAssignments.clear();
+  p_->sourceSlots.clear(); p_->sourceViewCounts.clear(); p_->faceAssignments.clear();
   p_->tracked.clear(); p_->frameSources.clear(); p_->frameSourcesValid = false;
   p_->selectedId = -1;
   p_->haveSource = false;

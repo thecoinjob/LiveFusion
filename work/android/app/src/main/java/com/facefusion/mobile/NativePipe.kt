@@ -272,6 +272,9 @@ object NativePipe {
 
     @JvmStatic external fun setSource(bgr: ByteArray, w: Int, h: Int): Boolean
     @JvmStatic external fun addSource(bgr: ByteArray, w: Int, h: Int): Int
+    /** Returns cosine distance; values above [maxDistance] were rejected, negative is error. */
+    @JvmStatic external fun addSourceView(sourceIndex: Int, bgr: ByteArray, w: Int, h: Int,
+                                          maxDistance: Float = 0.35f): Float
     @JvmStatic external fun setActiveSource(index: Int)
     @JvmStatic external fun setSwapEnabled(enabled: Boolean)
 

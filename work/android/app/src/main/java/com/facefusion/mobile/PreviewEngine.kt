@@ -340,12 +340,14 @@ class PreviewEngine {
         modelDir: String,
         opts: SwapOptions,
         slots: List<SourceSlot>,
+        identityViews: List<List<SourceSlot>> = slots.map { listOf(it) },
         activeSource: Int = 0,
         assignEnabled: Boolean = false,
+        onRejectedView: (identity: Int, view: Int, distance: Float) -> Unit = { _, _, _ -> },
         gate: (suspend () -> String?)? = null,
     ): String? = withContext(Dispatchers.Default) {
         if (slots.isEmpty()) return@withContext "No source image"
-        val tags = slots.map { it.tag }
+        val tags = identityViews.flatten().map { it.tag }
         // The SMALLEST job that is out of date, of three, in increasing cost:
         //   options  -> push them to the loaded pipeline, no I/O at all
         //   source   -> one gate check and one setSource
@@ -399,6 +401,17 @@ class PreviewEngine {
                 // than paying for the reload.
                 invalidate()
                 return@withContext "No face found in source image ${i + 1}"
+            }
+        }
+        for ((identity, views) in identityViews.withIndex()) {
+            views.drop(1).forEachIndexed { extra, view ->
+                val distance = NativePipe.addSourceView(
+                    identity, view.bgr, view.width, view.height, 0.35f)
+                if (distance < 0f) {
+                    invalidate()
+                    return@withContext "No face found in ${identity + 1}, photo ${extra + 2}"
+                }
+                if (distance > 0.35f) onRejectedView(identity, extra + 1, distance)
             }
         }
         appliedSlots = tags

@@ -42,6 +42,7 @@ import com.facefusion.mobile.R
 @Composable
 fun SourceRow(
     thumbs: List<Bitmap>,
+    labels: List<String> = emptyList(),
     active: Int,
     keepOriginalBrush: Boolean,
     onSelect: (Int) -> Unit,
@@ -70,7 +71,8 @@ fun SourceRow(
             }
         }
         thumbs.forEachIndexed { index, thumb ->
-            val label = stringResource(R.string.live_source_label, index + 1)
+            val label = labels.getOrNull(index)?.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.live_source_label, index + 1)
             Tile(
                 label = label,
                 selected = index == active && !keepOriginalBrush,

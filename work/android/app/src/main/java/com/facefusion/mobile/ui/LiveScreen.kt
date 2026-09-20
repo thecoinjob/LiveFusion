@@ -59,12 +59,16 @@ fun LiveScreen(
     sourceThumb: Bitmap?,
     /** Every source face, in native slot order. Drawn by the shared [SourceRow]. */
     sourceThumbs: List<Bitmap> = emptyList(),
+    sourceNames: List<String> = emptyList(),
     sourceCount: Int = 0,
     activeSource: Int = 0,
     onSelectSource: (Int) -> Unit = {},
     onPickSource: () -> Unit,
     onClearSource: () -> Unit,
     onCaptureSource: () -> Unit,
+    onAddIdentityView: (Int) -> Unit = {},
+    onRenameIdentity: (Int, String) -> Unit = { _, _ -> },
+    identityWarning: String? = null,
     frame: Bitmap?,
     running: Boolean,
     onToggleRun: () -> Unit,
@@ -128,6 +132,8 @@ fun LiveScreen(
     onToggleStream: () -> Unit = {},
 ) {
     var cleanFullscreen by rememberSaveable { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
     LaunchedEffect(running) { if (!running) cleanFullscreen = false }
 
     if (cleanFullscreen && frame != null) {
@@ -228,12 +234,32 @@ fun LiveScreen(
         // the file simply changes face at the switch. Only finalization is locked.
         SourceRow(
             thumbs = sourceThumbs,
+            labels = sourceNames,
             active = activeSource,
             keepOriginalBrush = keepOriginalBrush,
             onSelect = onSelectSource,
             onKeepOriginal = if (assignMode) onKeepOriginal else null,
             enabled = !finalizing,
         )
+        if (!running && sourceThumbs.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { onAddIdentityView(activeSource) },
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.identity_add_photo)) }
+                OutlinedButton(
+                    onClick = {
+                        renameText = sourceNames.getOrNull(activeSource).orEmpty()
+                        renaming = true
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.identity_rename)) }
+            }
+        }
+        identityWarning?.let {
+            Text(it, color = MaterialTheme.colorScheme.error,
+                 style = MaterialTheme.typography.bodySmall)
+        }
 
         // ---------------------------------------------------------------- the feed
         //
@@ -672,4 +698,28 @@ fun LiveScreen(
 
         Spacer(Modifier.height(8.dp))
     }
+
+    if (renaming) AlertDialog(
+        onDismissRequest = { renaming = false },
+        title = { Text(stringResource(R.string.identity_rename)) },
+        text = {
+            OutlinedTextField(
+                value = renameText,
+                onValueChange = { renameText = it.take(40) },
+                singleLine = true,
+                label = { Text(stringResource(R.string.identity_name)) },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onRenameIdentity(activeSource, renameText)
+                renaming = false
+            }, enabled = renameText.isNotBlank()) { Text(stringResource(R.string.identity_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = { renaming = false }) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+    )
 }

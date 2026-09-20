@@ -508,6 +508,12 @@ Turning it off runs your own Swap settings instead. This is experimental: the en
     <string name="live_swap_off">Swapping disabled</string>
     <string name="live_target">Target faces</string>
     <string name="live_source_label">Source %1$d</string>
+    <string name="identity_add_photo">Add view</string>
+    <string name="identity_rename">Rename</string>
+    <string name="identity_name">Identity name</string>
+    <string name="identity_save">Save</string>
+    <string name="identity_view_added">Photo added. This identity now has %1$d views.</string>
+    <string name="identity_mismatch">Not fused because it may be a different person: %1$s</string>
     <string name="nav_live">Live</string>
     <string name="live_assign_title">Assign per person</string>
     <string name="live_assign_off">Each face takes the selected source</string>

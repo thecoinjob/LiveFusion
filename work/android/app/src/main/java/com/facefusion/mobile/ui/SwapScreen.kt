@@ -122,6 +122,7 @@ fun SwapScreen(
     sourceThumb: Bitmap?,
     /** Every source face, in native slot order. Drawn by the shared [SourceRow]. */
     sourceThumbs: List<Bitmap> = emptyList(),
+    sourceNames: List<String> = emptyList(),
     activeSource: Int = 0,
     onSelectSource: (Int) -> Unit = {},
     /**
@@ -696,6 +697,7 @@ fun SwapScreen(
         // on both, which is what one shared list means for the person using it.
         SourceRow(
             thumbs = sourceThumbs,
+            labels = sourceNames,
             active = activeSource,
             keepOriginalBrush = keepOriginalBrush,
             onSelect = onSelectSource,

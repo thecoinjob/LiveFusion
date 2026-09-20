@@ -734,6 +734,18 @@ Java_com_facefusion_mobile_NativePipe_addSource(JNIEnv* env, jclass, jbyteArray 
   return (jint)g_pipe->addSource(img);
 }
 
+JNIEXPORT jfloat JNICALL
+Java_com_facefusion_mobile_NativePipe_addSourceView(JNIEnv* env, jclass, jint sourceIndex,
+                                                    jbyteArray jBgr, jint w, jint h,
+                                                    jfloat maxDistance) {
+  if (!g_pipe) { g_err = "pipeline not initialised"; return -1.f; }
+  ffcv::Image img(w, h, 3);
+  env->GetByteArrayRegion(jBgr, 0, (jsize)img.data.size(), (jbyte*)img.data.data());
+  const float result = g_pipe->addSourceView((int)sourceIndex, img, (float)maxDistance);
+  if (result < 0) g_err = g_pipe->error();
+  return result;
+}
+
 JNIEXPORT void JNICALL
 Java_com_facefusion_mobile_NativePipe_setActiveSource(JNIEnv* env, jclass, jint index) {
   if (g_pipe) g_pipe->setActiveSource(index);
