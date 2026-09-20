@@ -21,8 +21,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install Android SDK 35
-        uses: android-actions/setup-android@v3
 
       - name: Fetch matching upstream native runtime
         run: |
