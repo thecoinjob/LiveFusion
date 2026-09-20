@@ -406,6 +406,7 @@
     <string name="live_ready">Ready</string>
     <string name="live_starting">Starting camera…</string>
     <string name="live_start">Start</string>
+    <string name="live_fullscreen">Go full screen</string>
     <string name="live_stop">Stop</string>
     <!-- %1$s frames per second, %2$s the face count phrase below -->
     <string name="live_stat">%1$s fps   %2$s</string>

@@ -12,8 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.facefusion.mobile.R
@@ -40,39 +39,24 @@ fun AppScaffold(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            // The brand band. It follows the theme background (day #F7F8FA / night
-            // #121212) instead of a fixed teal gradient, so switching the scheme recolors
-            // the whole window including the header and status bar. The wordmark inherits
-            // onBackground: dark text on the light band, light text on the dark one. A
-            // hairline at the bottom keeps the band's edge visible on the light scheme.
+            // LiveFusion owns this build. Keep a quiet text header, but do not retain the
+            // upstream FaceFusion face mark or FACEFUSION wordmark anywhere in the UI.
             Box(
                 Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.background),
             ) {
                 Column {
-                    Row(
-                        Modifier
+                    Text(
+                        "LIVEFUSION",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Light,
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier
                             .fillMaxWidth()
-                            // targetSdk 35 makes the window edge-to-edge on Android 15, and
-                            // Scaffold insets its CONTENT but not its topBar -- so without this
-                            // the wordmark sits under the status bar and behind the cutout.
                             .statusBarsPadding()
-                            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        // In dark mode the brand band is 31% fainter -- the mark and the
-                        // wordmark read as chrome rather than content, and the header
-                        // should not out-shout the tiles under it on a dark theme.
-                        val brandAlpha =
-                            if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.69f else 1f
-                        AppMark(modifier = Modifier.alpha(brandAlpha))
-                        Wordmark(
-                            Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = brandAlpha),
-                        )
-                    }
+                            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 18.dp),
+                    )
                     HorizontalDivider(
                         thickness = 1.dp,
                         color = MaterialTheme.colorScheme.surfaceVariant,

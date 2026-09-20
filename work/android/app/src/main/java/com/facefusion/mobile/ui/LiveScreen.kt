@@ -26,11 +26,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import android.view.ViewGroup
+import android.view.WindowManager
 import com.facefusion.mobile.R
 import kotlinx.coroutines.delay
 
@@ -118,6 +127,47 @@ fun LiveScreen(
     streamUrl: String = "rtsp://127.0.0.1:8554/live",
     onToggleStream: () -> Unit = {},
 ) {
+    var cleanFullscreen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(running) { if (!running) cleanFullscreen = false }
+
+    if (cleanFullscreen && frame != null) {
+        Dialog(
+            onDismissRequest = { cleanFullscreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            val view = LocalView.current
+            val dialogWindow = (view.parent as? DialogWindowProvider)?.window
+            LaunchedEffect(dialogWindow) {
+                dialogWindow?.let { window ->
+                    window.setLayout(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    WindowCompat.setDecorFitsSystemWindows(window, false)
+                    WindowInsetsControllerCompat(window, window.decorView).apply {
+                        hide(WindowInsetsCompat.Type.systemBars())
+                        systemBarsBehavior =
+                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    }
+                }
+            }
+            Box(
+                Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = frame.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(scaleX = if (mirror) -1f else 1f),
+                )
+            }
+        }
+    }
+
     // SCROLLS. Without this the controls below the feed are simply clipped: the first build
     // put the settings switch behind the navigation bar, where the only clue it existed was
     // a few pixels of its track poking out under the Start button.
@@ -428,6 +478,14 @@ fun LiveScreen(
                                     else R.string.live_rec_start),
                      color = if (recording) FfRed else Color.Unspecified)
             }
+        }
+
+        OutlinedButton(
+            onClick = { cleanFullscreen = true },
+            enabled = running && frame != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.live_fullscreen))
         }
 
 
