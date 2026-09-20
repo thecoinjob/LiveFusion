@@ -116,6 +116,9 @@ class LiveEngine {
      */
     @Volatile var recorder: LiveRecorder? = null
 
+    /** Optional network destination for the same clean frame used by [recorder]. */
+    @Volatile var streamer: LiveFrameSink? = null
+
     /**
      * Where liveFrame writes the full-resolution swapped BGR while recording.
      *
@@ -349,6 +352,7 @@ class LiveEngine {
             // moment; testing it twice could hand liveFrame a buffer and then find no
             // recorder to give the result to, or the reverse.
             val rec = recorder
+            val stream = streamer
             val nowMs = System.currentTimeMillis()
             val gateNow = !gateThreshold.isNaN() && (nowMs - lastGateMs >= kGateIntervalMs)
             if (gateNow) lastGateMs = nowMs
@@ -360,7 +364,7 @@ class LiveEngine {
                 w, h, bmp, dw, dh,
                 if (gateNow) gateThreshold else Float.NaN,
                 // Only while recording: null costs the native side one branch.
-                if (rec != null) {
+                if (rec != null || stream != null) {
                     val need = w * h * 3
                     var b = recBuf
                     if (b == null || b.size != need) { b = ByteArray(need); recBuf = b }
@@ -386,7 +390,10 @@ class LiveEngine {
             // AFTER the error checks, so a refused or failed frame is never recorded. The
             // gate stops the pump on a refusal, and the file must not contain the frame
             // that caused it.
-            if (rec != null) recBuf?.let { rec.frame(it, w, h) }
+            recBuf?.let { clean ->
+                rec?.frame(clean, w, h)
+                stream?.frame(clean, w, h)
+            }
 
             if (++nStat == 30) {
                 // One bucket, because there is one call -- but one number cannot say

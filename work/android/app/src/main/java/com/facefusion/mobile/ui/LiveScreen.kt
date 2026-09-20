@@ -112,6 +112,11 @@ fun LiveScreen(
     onClearAssignments: () -> Unit = {},
     /** Start or finish recording the feed. Only meaningful while it is running. */
     onToggleRecord: () -> Unit = {},
+    /** Publish the clean post-swap frame over a local RTSP server for VCAM. */
+    streaming: Boolean = false,
+    streamStatus: String? = null,
+    streamUrl: String = "rtsp://127.0.0.1:8554/live",
+    onToggleStream: () -> Unit = {},
 ) {
     // SCROLLS. Without this the controls below the feed are simply clipped: the first build
     // put the settings switch behind the navigation bar, where the only clue it existed was
@@ -423,6 +428,24 @@ fun LiveScreen(
                                     else R.string.live_rec_start),
                      color = if (recording) FfRed else Color.Unspecified)
             }
+        }
+
+
+        OutlinedButton(
+            onClick = onToggleStream,
+            enabled = running,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(if (streaming) R.string.live_stream_stop
+                                else R.string.live_stream_start),
+                 color = if (streaming) FfRed else Color.Unspecified)
+        }
+        if (streaming) {
+            Text(streamUrl, fontFamily = FontFamily.Monospace,
+                 style = MaterialTheme.typography.bodySmall)
+            if (streamStatus != null)
+                Text(streamStatus, style = MaterialTheme.typography.bodySmall,
+                     color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         // ⚠ The MIRROR only. The lens already has a control -- the chip over the top-left

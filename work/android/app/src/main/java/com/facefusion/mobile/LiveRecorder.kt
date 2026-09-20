@@ -35,7 +35,7 @@ class LiveRecorder(
     private val out: File,
     private val microphone: LiveMicrophone? = null,
     private val onLog: (String) -> Unit = {},
-) {
+) : LiveFrameSink {
 
     private var encoder: MediaCodec? = null
     private var muxer: MediaMuxer? = null
@@ -138,7 +138,7 @@ class LiveRecorder(
     // ⚠ A BLOCK body, not `= synchronized(lock) { ... }`. An expression body infers its
     // type from the block's last expression -- Result<Unit>, from the runCatching below --
     // and then every early `return` in it is a type error. Unit is what this returns.
-    fun frame(bgr: ByteArray, w: Int, h: Int) {
+    override fun frame(bgr: ByteArray, w: Int, h: Int) {
       synchronized(lock) {
         // stopped FIRST: a frame that was already inside the pump when the recording ended
         // arrives here afterwards, and must do nothing at all. See [stopped].

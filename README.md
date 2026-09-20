@@ -1,4 +1,16 @@
-# FaceFusion Mobile
+# LiveFusion
+
+LiveFusion is a user-controlled fork of FaceFusion Mobile that publishes the clean,
+full-resolution post-swap Live frame over a local H.264 RTSP server. The stream contains
+the processed camera image only: no app logo, controls, status bar or screen crop.
+
+Start Live, then tap **Start clean RTSP stream**. A same-device client can open:
+
+`rtsp://127.0.0.1:8554/live`
+
+The original project and its licence, content gate and attribution are preserved below.
+
+## FaceFusion Mobile upstream
 
 Offline face swapping on Android. Pick a source face and a target photo or video, and the
 swap runs entirely on your phone. It uses the Qualcomm Hexagon NPU where there is one, and

@@ -1,0 +1,49 @@
+name: Build LiveFusion APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "work/android/**"
+      - ".github/workflows/build-livefusion.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out LiveFusion
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK 35
+        uses: android-actions/setup-android@v3
+
+      - name: Fetch matching upstream native runtime
+        run: |
+          curl -fL -o upstream.apk \
+            https://github.com/AbrahamPaulJ/facefusion-mobile/releases/download/v0.9.26/facefusion-mobile-0.9.26-release.apk
+          mkdir -p extracted prebuilt
+          unzip -q upstream.apk 'lib/arm64-v8a/*.so' -d extracted
+          mv extracted/lib/arm64-v8a prebuilt/arm64-v8a
+          test -f prebuilt/arm64-v8a/libffnative.so
+
+      - name: Build LiveFusion debug APK
+        working-directory: work/android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug \
+            -PprebuiltNativeDir="$GITHUB_WORKSPACE/prebuilt" \
+            --stacktrace
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveFusion-0.1.0-debug
+          path: work/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

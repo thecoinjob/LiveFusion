@@ -316,6 +316,9 @@ class MainActivity : ComponentActivity() {
     private var liveRecording by mutableStateOf(false)
     private var liveMicrophone by mutableStateOf(false)
     private var liveFinalizing by mutableStateOf(false)
+    private var liveStreamer: LiveRtspStreamer? = null
+    private var liveStreaming by mutableStateOf(false)
+    private var liveStreamStatus by mutableStateOf<String?>(null)
 
     // ⚠ Compose state, NOT live.isRunning. A plain field on the engine is invisible to
     // recomposition, so the first build showed a running feed under a button still saying
@@ -1689,6 +1692,10 @@ class MainActivity : ComponentActivity() {
                                 selectionBox = liveSelectionBox,
                                 onClearAssignments = ::clearLiveAssignments,
                                 onToggleRecord = ::toggleLiveRecording,
+                                streaming = liveStreaming,
+                                streamStatus = liveStreamStatus,
+                                streamUrl = liveStreamer?.url ?: "rtsp://127.0.0.1:8554/live",
+                                onToggleStream = ::toggleLiveStreaming,
                             )
 
                             Screen.Settings -> SettingsScreen(
@@ -3329,6 +3336,33 @@ class MainActivity : ComponentActivity() {
         status = getString(R.string.status_live_recording)
     }
 
+    private fun toggleLiveStreaming() {
+        if (liveStreaming) {
+            stopLiveStreaming()
+            return
+        }
+        if (!liveRunning) return
+        val publisher = runCatching {
+            LiveRtspStreamer(8554) { message -> liveStreamStatus = message }
+        }.getOrElse {
+            liveStreamStatus = codecWhy(it, "stream failed")
+            return
+        }
+        liveStreamer = publisher
+        live.streamer = publisher
+        liveStreaming = true
+        liveStreamStatus = "Preparing clean stream…"
+    }
+
+    private fun stopLiveStreaming() {
+        live.streamer = null
+        val publisher = liveStreamer
+        liveStreamer = null
+        liveStreaming = false
+        publisher?.stop()
+        liveStreamStatus = null
+    }
+
     private fun toggleSwapEnabled() {
         liveSwapEnabled = !liveSwapEnabled
         NativePipe.setSwapEnabled(liveSwapEnabled)
@@ -3570,6 +3604,7 @@ class MainActivity : ComponentActivity() {
         // earlier comment here claimed the ordering was the protection; it is not, and a
         // late frame would have built a second encoder over the same file.
         finishLiveRecording(discard = false)
+        stopLiveStreaming()
         liveRunning = false
         NativePipe.setTrackPeriod(0)
         // Assignments die with the pipeline the engine is about to release; the UI state

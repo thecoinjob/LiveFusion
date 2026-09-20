@@ -454,6 +454,8 @@
     <string name="live_rec_start">Record</string>
     <string name="live_rec_stop">Stop recording</string>
     <string name="live_rec_badge">REC</string>
+    <string name="live_stream_start">Start clean RTSP stream</string>
+    <string name="live_stream_stop">Stop clean RTSP stream</string>
     <string name="status_live_recording">Recording the live feed.</string>
     <string name="status_live_rec_saved">Recording saved, %1$d frames.</string>
     <string name="status_live_rec_empty">Nothing was recorded.</string>

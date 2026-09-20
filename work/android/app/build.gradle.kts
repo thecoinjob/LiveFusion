@@ -40,7 +40,7 @@ val variantTag = if (hasContentGate) "" else "-dev"
 // corrupt, each other's downloaded context binaries.  The price is that dev downloads its
 // own ~300 MB tier.
 val idSuffix = if (hasContentGate) "" else ".dev"
-val appLabel = if (hasContentGate) "FaceFusion" else "FaceFusion Dev"
+val appLabel = if (hasContentGate) "LiveFusion" else "LiveFusion Dev"
 
 // The ncnn backend (roadmap 6), on when its staged build is present.
 //
@@ -70,6 +70,10 @@ val qnnTiers = (System.getenv("QNN_HTP_TIERS") ?: "68 69 73 75 79 81")
     .trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
 val qnnStage by tasks.registering {
     doLast {
+        if (providers.gradleProperty("prebuiltNativeDir").isPresent) {
+            logger.lifecycle("Using trusted prebuilt native libraries; skipping QNN staging")
+            return@doLast
+        }
         val required = mutableListOf(
             file("src/main/cpp/include/QNN/QnnBackend.h"),
             file("src/main/jniLibs/arm64-v8a/libQnnHtp.so"),
@@ -133,7 +137,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.facefusion.mobile$idSuffix"
+        applicationId = "com.thecoinjob.livefusion$idSuffix"
         buildConfigField("boolean", "DEV_BUILD", (!hasContentGate).toString())
         minSdk = 31                 // SM8750 / HTP v79 is far above this
         targetSdk = 35
@@ -448,8 +452,8 @@ android {
         // 97 is installed on the bench and sitting in its Downloads: reusing the name would
         // leave two builds answering to it, which is the ambiguity the rule exists to stop.
         versionCode = 98
-        versionName = "0.9.26$variantTag"    // "-dev" == NO content gate
-        setProperty("archivesBaseName", "facefusion-mobile-$versionName")
+        versionName = "0.1.0$variantTag"
+        setProperty("archivesBaseName", "livefusion-$versionName")
         manifestPlaceholders["appLabel"] = appLabel
         ndk { abiFilters += "arm64-v8a" }
         if (prebuiltNativeDir == null) externalNativeBuild {
@@ -515,7 +519,7 @@ android {
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-mic-debug"
+            versionNameSuffix = "-debug"
             manifestPlaceholders["appLabel"] = "$appLabel Debug"
         }
         release {
