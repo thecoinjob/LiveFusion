@@ -13,6 +13,7 @@ class LiveRtspStreamer(
     private var encoder: MediaCodec? = null
     private var width = 0
     private var height = 0
+    private var cropped = ByteArray(0)
     private var startedNs = 0L
     private var stopped = false
 
@@ -25,13 +26,16 @@ class LiveRtspStreamer(
     override fun frame(bgr: ByteArray, width: Int, height: Int) {
         if (stopped) return
         try {
-            ensureEncoder(width, height)
+            // Match LiveScreen's preview geometry: centre-crop to 3:4 portrait or 4:3
+            // landscape instead of letting a consumer stretch the full sensor frame.
+            val (clean, outW, outH) = centreCropForPreview(bgr, width, height)
+            ensureEncoder(outW, outH)
             val enc = encoder ?: return
             drain(enc)
             val input = enc.dequeueInputBuffer(0)
             if (input < 0) return
             val ptsUs = (System.nanoTime() - startedNs) / 1_000L
-            queueBgrFrame(enc, input, bgr, width, height, ptsUs) {
+            queueBgrFrame(enc, input, clean, outW, outH, ptsUs) {
                 onStatus("stream encoder: $it")
             }
             drain(enc)
@@ -73,12 +77,49 @@ class LiveRtspStreamer(
         format.setInteger(MediaFormat.KEY_BIT_RATE, (width * height * 6).coerceAtLeast(2_000_000))
         format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        // RTSP has no MP4 display matrix, so explicitly advertise square samples.
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            format.setInteger(MediaFormat.KEY_PIXEL_ASPECT_RATIO_WIDTH, 1)
+            format.setInteger(MediaFormat.KEY_PIXEL_ASPECT_RATIO_HEIGHT, 1)
+        }
         val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         enc.start()
         encoder = enc
         startedNs = System.nanoTime()
         onStatus("Preparing clean stream…")
+    }
+
+    /** Centre-crop to the same aspect-ratio limits used by LiveScreen. */
+    private fun centreCropForPreview(
+        source: ByteArray, sourceW: Int, sourceH: Int,
+    ): Triple<ByteArray, Int, Int> {
+        val portrait = sourceH >= sourceW
+        val outW: Int
+        val outH: Int
+        if (portrait) {
+            outW = sourceW and 1.inv()
+            outH = minOf(sourceH, outW * 4 / 3) and 1.inv()
+        } else {
+            outH = sourceH and 1.inv()
+            outW = minOf(sourceW, outH * 4 / 3) and 1.inv()
+        }
+        if (outW == sourceW && outH == sourceH) return Triple(source, outW, outH)
+
+        val need = outW * outH * 3
+        if (cropped.size != need) cropped = ByteArray(need)
+        val left = (sourceW - outW) / 2
+        val top = (sourceH - outH) / 2
+        val rowBytes = outW * 3
+        for (y in 0 until outH) {
+            source.copyInto(
+                cropped,
+                destinationOffset = y * rowBytes,
+                startIndex = ((top + y) * sourceW + left) * 3,
+                endIndex = ((top + y) * sourceW + left) * 3 + rowBytes,
+            )
+        }
+        return Triple(cropped, outW, outH)
     }
 
     private fun drain(enc: MediaCodec) {
