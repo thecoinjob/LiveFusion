@@ -103,30 +103,49 @@ class LiveEngine {
     @Volatile var frontCamera: Boolean = true
 
     /**
-     * Set to record what the pump produces — roadmap 13b. Null is not recording.
+     * One canonical route for the full-resolution post-swap frame.
      *
-     * Owned by the caller, which starts and stops it; this class only feeds it. That split
-     * is deliberate: where the file goes, what it is called and when it is saved are all
-     * MainActivity's business, and this class has stayed free of them for the same reason
-     * it takes a gate THRESHOLD rather than knowing what a gate is.
-     *
-     * ⚠ Fed from the analyzer thread, in line with the pump. See LiveRecorder.frame for
-     * why it drops a frame rather than blocking: the recording is the guest here, and a
-     * preview that stutters because a recording is running is the wrong trade.
+     * Recording, RTSP and future appearance processing all attach here. The processor runs
+     * once before every sink, so adding another presentation surface never creates another
+     * face-model inference loop. With no processor and no sinks, liveFrame keeps its current
+     * fast preview-only path and does not copy a full-resolution BGR frame across JNI.
      */
-    @Volatile var recorder: LiveRecorder? = null
+    val output = LiveFramePipeline()
 
-    /** Optional network destination for the same clean frame used by [recorder]. */
-    @Volatile var streamer: LiveFrameSink? = null
+    // Compatibility accessors keep MainActivity's existing recording/RTSP controls stable
+    // while ownership moves behind [output]. Pass 3 can hand the pipeline to a service
+    // without teaching the engine about either destination.
+    @Volatile private var attachedRecorder: LiveRecorder? = null
+    var recorder: LiveRecorder?
+        get() = attachedRecorder
+        set(value) {
+            val old = attachedRecorder
+            if (old !== value) {
+                old?.let(output::removeSink)
+                attachedRecorder = value
+                value?.let(output::addSink)
+            }
+        }
+
+    @Volatile private var attachedStreamer: LiveFrameSink? = null
+    var streamer: LiveFrameSink?
+        get() = attachedStreamer
+        set(value) {
+            val old = attachedStreamer
+            if (old !== value) {
+                old?.let(output::removeSink)
+                attachedStreamer = value
+                value?.let(output::addSink)
+            }
+        }
 
     /**
-     * Where liveFrame writes the full-resolution swapped BGR while recording.
+     * Reusable full-resolution BGR storage for [output].
      *
-     * Allocated once per resolution and reused, like the display bitmaps above and for the
-     * same reason: at 720p this is 2.7 MB, and a fresh one per frame would be ~40 MB/s of
-     * churn to hand the encoder bytes it copies again anyway.
+     * Allocated only while the route needs it. At 720p this is 2.7 MB, and a fresh array per
+     * frame would be roughly 40 MB/s of garbage before an encoder copied the bytes again.
      */
-    private var recBuf: ByteArray? = null
+    private var outputBuf: ByteArray? = null
 
     // Per-stage cost, logged every 30 frames. Live was 6.5 fps on its first run against
     // 26.6 on a file, and no amount of reasoning about which stage was to blame beat
@@ -278,7 +297,7 @@ class LiveEngine {
         val e = exec
         exec = null
         bufs[0] = null; bufs[1] = null
-        recBuf = null
+        outputBuf = null
         fps = 0.0
         if (e == null) { onDrained?.invoke(); return }
         e.shutdown()
@@ -348,11 +367,16 @@ class LiveEngine {
             // Sample on the first frame of a session and every kGateIntervalMs after.
             // lastGateMs is zeroed in start(), so the first frame always samples: a session
             // that will be refused should be refused before it has shown anything.
-            // Read ONCE per frame. It is volatile and the caller may clear it at any
-            // moment; testing it twice could hand liveFrame a buffer and then find no
-            // recorder to give the result to, or the reverse.
-            val rec = recorder
-            val stream = streamer
+            // Snapshot the whole route once. A sink or processor attached while this frame is
+            // already in flight begins on the next one; a detached sink may receive this last
+            // frame, matching the old recorder/streamer volatile-field behaviour.
+            val route = output.snapshot()
+            val fullFrame = if (route.needsFullFrame) {
+                val need = w * h * 3
+                var b = outputBuf
+                if (b == null || b.size != need) { b = ByteArray(need); outputBuf = b }
+                b
+            } else null
             val nowMs = System.currentTimeMillis()
             val gateNow = !gateThreshold.isNaN() && (nowMs - lastGateMs >= kGateIntervalMs)
             if (gateNow) lastGateMs = nowMs
@@ -363,13 +387,8 @@ class LiveEngine {
                 p[2].buffer, p[2].rowStride, p[2].pixelStride,
                 w, h, bmp, dw, dh,
                 if (gateNow) gateThreshold else Float.NaN,
-                // Only while recording: null costs the native side one branch.
-                if (rec != null || stream != null) {
-                    val need = w * h * 3
-                    var b = recBuf
-                    if (b == null || b.size != need) { b = ByteArray(need); recBuf = b }
-                    b
-                } else null,
+                // Null keeps the existing preview-only fast path at exactly one native call.
+                fullFrame,
             )
             msPump += (System.nanoTime() - t) / 1e6
             // -2 refused, -3 could not measure. Both STOP the pump rather than skipping a
@@ -387,12 +406,18 @@ class LiveEngine {
                 return
             }
 
-            // AFTER the error checks, so a refused or failed frame is never recorded. The
-            // gate stops the pump on a refusal, and the file must not contain the frame
-            // that caused it.
-            recBuf?.let { clean ->
-                rec?.frame(clean, w, h)
-                stream?.frame(clean, w, h)
+            // AFTER the error checks, so a refused or failed frame reaches no processor,
+            // recorder or network sink. A processor mutates the one canonical BGR frame
+            // before every sink sees it. Only then is the preview refreshed from that frame,
+            // keeping the normal pane and fullscreen consistent with RTSP/recording.
+            fullFrame?.let { finalFrame ->
+                val processed = output.publish(route, finalFrame, w, h)
+                if (processed) {
+                    val pixels = NativePipe.bgrToArgb(finalFrame, w, h, dw, dh)
+                    if (pixels.size == dw * dh) {
+                        bmp.setPixels(pixels, 0, dw, 0, 0, dw, dh)
+                    }
+                }
             }
 
             if (++nStat == 30) {
