@@ -109,11 +109,11 @@ class PersistentLiveService : Service(), LifecycleOwner {
         if (!Settings.canDrawOverlays(this)) return
         windows = getSystemService(WINDOW_SERVICE) as WindowManager
         val density = resources.displayMetrics.density
-        val width = (250f * density).roundToInt()
+        val width = (150f * density).roundToInt()
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE)
         val lp = WindowManager.LayoutParams(
             width,
-            (width * 3f / 5f).roundToInt(),
+            (width * 5f / 3f).roundToInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
