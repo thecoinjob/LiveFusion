@@ -1,12 +1,15 @@
 package com.facefusion.mobile
 
+import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -332,6 +335,8 @@ class MainActivity : ComponentActivity() {
 
     /** Whether Live is bound to the foreground service and owns the clean overlay. */
     private var persistentLive by mutableStateOf(false)
+    /** True only while Capture LF presents this Activity as clean picture-in-picture. */
+    private var captureLf by mutableStateOf(false)
 
     // ⚠ Compose state, NOT live.isRunning. A plain field on the engine is invisible to
     // recomposition, so the first build showed a running feed under a button still saying
@@ -1547,7 +1552,7 @@ class MainActivity : ComponentActivity() {
                         refreshSwapped(force = true)
                     }
                 }
-                AppScaffold(
+                if (captureLf) CaptureLfFrame(liveFrame, liveMirror) else AppScaffold(
                     screen,
                     {
                         // Leaving the tab stops the feed. Without this the camera keeps
@@ -1791,6 +1796,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleStream = ::toggleLiveStreaming,
                                 persistent = persistentLive,
                                 onTogglePersistent = ::togglePersistentLive,
+                                onCaptureLf = ::enterCaptureLf,
                             )
 
                             Screen.Settings -> SettingsScreen(
@@ -1951,6 +1957,14 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         PersistentLiveService.hide()
         refreshModelsMissing()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        captureLf = isInPictureInPictureMode
     }
 
     override fun onDestroy() {
@@ -3264,6 +3278,20 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         if (persistentLive) PersistentLiveService.show()
         else if (liveRunning) stopLive()
+    }
+
+    private fun enterCaptureLf() {
+        if (!liveRunning || liveFrame == null || persistentLive) return
+        captureLf = true
+        val entered = enterPictureInPictureMode(
+            PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(3, 5))
+                .build(),
+        )
+        if (!entered) {
+            captureLf = false
+            liveNote = "Capture LF could not enter picture-in-picture"
+        }
     }
 
     private fun togglePersistentLive() {

@@ -133,6 +133,8 @@ fun LiveScreen(
     /** Keep the one Live engine running behind a clean, draggable system overlay. */
     persistent: Boolean = false,
     onTogglePersistent: () -> Unit = {},
+    /** Put this Activity's clean Live output into Android picture-in-picture for capture. */
+    onCaptureLf: () -> Unit = {},
 ) {
     var cleanFullscreen by rememberSaveable { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -526,6 +528,14 @@ fun LiveScreen(
         }
 
         OutlinedButton(
+            onClick = onCaptureLf,
+            enabled = running && frame != null && !persistent,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Capture LF")
+        }
+
+        OutlinedButton(
             onClick = onToggleStream,
             enabled = running,
             modifier = Modifier.fillMaxWidth(),
@@ -732,4 +742,24 @@ fun LiveScreen(
             }
         },
     )
+}
+
+/** Clean, control-free frame used while MainActivity is in Capture LF picture-in-picture. */
+@Composable
+fun CaptureLfFrame(frame: Bitmap?, mirror: Boolean) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (frame != null) {
+            Image(
+                bitmap = frame.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(scaleX = if (mirror) -1f else 1f),
+            )
+        }
+    }
 }
