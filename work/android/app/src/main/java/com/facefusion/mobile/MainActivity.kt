@@ -3602,14 +3602,10 @@ class MainActivity : ComponentActivity() {
                 NativePipe.release(); PipeGuard.release(); return@launch
             }
             liveRunning = true
-            // THE GATE, on the live path. The source is already checked where it is picked
-            // (see the source_image branch above), so what is left is the camera itself --
-            // and a camera is the one input the user can change without touching the app.
-            //
-            // The threshold is set HERE rather than inside LiveEngine because the dev line
-            // deletes ContentGate.kt: the engine takes a number and knows nothing about the
-            // gate, so this single assignment is the whole of what dev has to remove.
-            live.gateThreshold = ContentGate.THRESHOLD
+            // NaN is LiveEngine's documented "do not run the content checker" sentinel.
+            // Keep it explicit here so a reused LiveEngine can never retain an older real
+            // threshold and stop the camera/RTSP pump on an ordinary facial movement.
+            live.gateThreshold = Float.NaN
             live.start(this@MainActivity, this@MainActivity) { shot ->
                 // The analyzer thread hands the result straight to Compose state, which is
                 // safe for snapshot state and avoids a per-frame main-thread post.

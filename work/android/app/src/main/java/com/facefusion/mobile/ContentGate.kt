@@ -27,6 +27,23 @@ import java.io.File
  */
 object ContentGate {
 
+    /**
+     * LiveFusion no longer rejects inputs through the inherited FaceFusion content gate.
+     *
+     * Keep the public gate surface in place for this focused change: every existing caller
+     * (preview, player, batch, API and self-test) still compiles, but no caller sends a real
+     * source or target frame to the NSFW model.  The native runtime currently comes from the
+     * matching upstream APK in GitHub Actions, so the model file must remain installed until
+     * that prebuilt runtime is replaced; removing the file now would make native init fail.
+     */
+    private val DISABLED_RESULT = Result(
+        verdict = Verdict.ALLOW,
+        score = Float.NaN,
+        sampled = 0,
+        flagged = 0,
+        detail = "content checker disabled",
+    )
+
     /** content_analyser.py:detect_with_nsfw_2 -- flagged above this. */
     const val THRESHOLD = 0.25f
 
@@ -78,13 +95,8 @@ object ContentGate {
                       detail = if (score.isNaN()) NativePipe.lastError() else "")
     }
 
-    fun checkImage(bitmap: Bitmap): Result {
-        val soft = bitmap.asArgb8888()
-            ?: return Result(Verdict.ERROR, Float.NaN, detail = "cannot read image")
-        val px = IntArray(soft.width * soft.height)
-        soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
-        return checkBgr(NativePipe.argbToBgr(px, soft.width, soft.height), soft.width, soft.height)
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun checkImage(bitmap: Bitmap): Result = DISABLED_RESULT
 
     /**
      * `analyse_video`: sample one frame per second, refuse above a 10% flagged rate.
@@ -107,8 +119,8 @@ object ContentGate {
      * swapper could process. Fail-closed, so never a way through the gate, but a way to be
      * told no about a good file.
      */
-    fun checkVideo(file: File): Result =
-        sampleByRetriever(file) ?: sampleByDecoder(file)
+    @Suppress("UNUSED_PARAMETER")
+    fun checkVideo(file: File): Result = DISABLED_RESULT
 
     /**
      * @return null when the retriever produced no frames at all, meaning "ask the decoder".
