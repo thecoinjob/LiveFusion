@@ -956,10 +956,7 @@ class MainActivity : ComponentActivity() {
         liveSourceIndex = index
         // setActiveSource also re-applies to the SELECTED person, which is exactly what
         // takes them back off "keep the original" -- so this covers both directions.
-        if (liveRunning) {
-            NativePipe.setActiveSource(index)
-            (live.output.processor as? LiveAppearanceProcessor)?.activeSource = index
-        }
+        if (liveRunning) NativePipe.setActiveSource(index)
     }
 
     /** Live's other brush. The next tapped person keeps the face they were filmed with. */
@@ -3664,7 +3661,6 @@ class MainActivity : ComponentActivity() {
             val opts = (if (liveUseMySettings) base else base.copy(
                 faceEnhance = false, pixelBoost = 1, lipSync = false, trackPeriod = 4,
             )).copy(largestOnly = liveLargestOnly)
-            var appearance: LiveAppearanceProcessor? = null
             val startError = withContext(Dispatchers.Default) {
                 val models = modelDir()
                 val libDir = applicationInfo.nativeLibraryDir
@@ -3684,18 +3680,12 @@ class MainActivity : ComponentActivity() {
                 NativePipe.setActiveSource(liveSourceIndex)
                 NativePipe.setFaceAssignEnabled(liveAssignMode)
                 NativePipe.setSwapLargestOnly(liveLargestOnly)
-                appearance = LiveAppearanceProcessor.create(
-                    prepared.slots.map {
-                        LiveAppearanceProcessor.SourceFrame(it.bgr, it.width, it.height)
-                    },
-                )?.also { it.activeSource = liveSourceIndex }
                 null
             }
             if (startError != null) {
                 liveNote = startError
                 NativePipe.release(); PipeGuard.release(); return@launch
             }
-            live.output.processor = appearance
             liveRunning = true
             // NaN is LiveEngine's documented "do not run the content checker" sentinel.
             // Keep it explicit here so a reused LiveEngine can never retain an older real
