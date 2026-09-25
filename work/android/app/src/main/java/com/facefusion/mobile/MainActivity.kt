@@ -6,6 +6,7 @@ import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +19,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
+import androidx.core.content.ContextCompat
 import com.facefusion.mobile.ui.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -328,6 +330,9 @@ class MainActivity : ComponentActivity() {
     private var liveStreaming by mutableStateOf(false)
     private var liveStreamStatus by mutableStateOf<String?>(null)
 
+    /** Whether Live is bound to the foreground service and owns the clean overlay. */
+    private var persistentLive by mutableStateOf(false)
+
     // ⚠ Compose state, NOT live.isRunning. A plain field on the engine is invisible to
     // recomposition, so the first build showed a running feed under a button still saying
     // "Start" -- the pixels updated because the bitmap reference changed and nothing else
@@ -370,6 +375,11 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startLive()
         else liveNote = "Camera permission denied"
+    }
+    private val askOverlay = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()) {
+        if (Settings.canDrawOverlays(this)) enablePersistentLive()
+        else liveNote = "Display over other apps permission is required"
     }
     private var advancedOpen by mutableStateOf(false)
     private var modelsVersion by mutableStateOf(0)
@@ -946,7 +956,10 @@ class MainActivity : ComponentActivity() {
         liveSourceIndex = index
         // setActiveSource also re-applies to the SELECTED person, which is exactly what
         // takes them back off "keep the original" -- so this covers both directions.
-        if (liveRunning) NativePipe.setActiveSource(index)
+        if (liveRunning) {
+            NativePipe.setActiveSource(index)
+            (live.output.processor as? LiveAppearanceProcessor)?.activeSource = index
+        }
     }
 
     /** Live's other brush. The next tapped person keeps the face they were filmed with. */
@@ -1779,6 +1792,8 @@ class MainActivity : ComponentActivity() {
                                 streamStatus = liveStreamStatus,
                                 streamUrl = liveStreamer?.url ?: "rtsp://127.0.0.1:8554/live",
                                 onToggleStream = ::toggleLiveStreaming,
+                                persistent = persistentLive,
+                                onTogglePersistent = ::togglePersistentLive,
                             )
 
                             Screen.Settings -> SettingsScreen(
@@ -1937,10 +1952,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        PersistentLiveService.hide()
         refreshModelsMissing()
     }
 
     override fun onDestroy() {
+        if (isFinishing) {
+            PersistentLiveService.onCloseRequested = null
+            if (liveRunning) stopLive()
+            if (persistentLive) stopService(Intent(this, PersistentLiveService::class.java))
+            persistentLive = false
+        }
         super.onDestroy()
         scrubJob?.cancel()
         stopVoicePlayback()
@@ -3238,14 +3260,74 @@ class MainActivity : ComponentActivity() {
      * processFrame on one global is exactly what that guard exists to prevent.
      */
     /**
-     * ⚠ Live must not survive the activity leaving the foreground. CameraX unbinds itself
-     * -- it is lifecycle-bound -- but nothing else does: the pipeline would stay loaded and
-     * PipeGuard would stay HELD, so the next run anywhere in the app reports the NPU busy
-     * with no way to clear it short of killing the process.
+     * Normal Live still stops with the Activity. Persistent Live is bound to the service
+     * lifecycle instead, so leaving the app only reveals its clean video rectangle.
      */
     override fun onStop() {
         super.onStop()
+        if (persistentLive) PersistentLiveService.show()
+        else if (liveRunning) stopLive()
+    }
+
+    private fun togglePersistentLive() {
+        if (persistentLive) {
+            disablePersistentLive()
+            return
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            askOverlay.launch(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+            return
+        }
+        enablePersistentLive()
+    }
+
+    private fun enablePersistentLive() {
+        if (sources.getOrNull(liveSourceIndex) == null) return
         if (liveRunning) stopLive()
+        persistentLive = true
+        PersistentLiveService.onCloseRequested = {
+            runOnUiThread {
+                if (liveRunning) stopLive()
+                persistentLive = false
+                PersistentLiveService.updateFrame(null, liveMirror)
+                PersistentLiveService.onCloseRequested = null
+                stopService(Intent(this, PersistentLiveService::class.java))
+                finishAndRemoveTask()
+            }
+        }
+        ContextCompat.startForegroundService(
+            this, Intent(this, PersistentLiveService::class.java),
+        )
+        lifecycleScope.launch {
+            for (attempt in 0 until 40) {
+                if (PersistentLiveService.lifecycleOwner() != null) break
+                delay(50)
+            }
+            if (PersistentLiveService.lifecycleOwner() == null) {
+                persistentLive = false
+                liveNote = "Could not start persistent live service"
+                return@launch
+            }
+            startLive()
+        }
+    }
+
+    private fun disablePersistentLive() {
+        val restart = liveRunning
+        if (restart) stopLive()
+        persistentLive = false
+        PersistentLiveService.updateFrame(null, liveMirror)
+        PersistentLiveService.onCloseRequested = null
+        stopService(Intent(this, PersistentLiveService::class.java))
+        if (restart) lifecycleScope.launch {
+            delay(100)
+            startLive()
+        }
     }
 
     private fun toggleLive() {
@@ -3557,8 +3639,14 @@ class MainActivity : ComponentActivity() {
         // Nothing to run with -- the guard the caller's button already relies on, kept so
         // this method cannot be entered with an empty list by any other path.
         if (sources.getOrNull(liveSourceIndex) == null) return
+        val liveOwner = if (persistentLive) PersistentLiveService.lifecycleOwner() else this
+        if (liveOwner == null) {
+            liveNote = "Persistent live service is not ready"
+            return
+        }
         // Read at bind time by the engine, so it must be set before start() and not after.
         live.frontCamera = liveFrontCamera
+        live.output.processor = null
         lifecycleScope.launch {
             if (!PipeGuard.acquire("live", 5000)) {
                 liveNote = pipeBusyMessage(); return@launch
@@ -3576,6 +3664,7 @@ class MainActivity : ComponentActivity() {
             val opts = (if (liveUseMySettings) base else base.copy(
                 faceEnhance = false, pixelBoost = 1, lipSync = false, trackPeriod = 4,
             )).copy(largestOnly = liveLargestOnly)
+            var appearance: LiveAppearanceProcessor? = null
             val startError = withContext(Dispatchers.Default) {
                 val models = modelDir()
                 val libDir = applicationInfo.nativeLibraryDir
@@ -3595,18 +3684,24 @@ class MainActivity : ComponentActivity() {
                 NativePipe.setActiveSource(liveSourceIndex)
                 NativePipe.setFaceAssignEnabled(liveAssignMode)
                 NativePipe.setSwapLargestOnly(liveLargestOnly)
+                appearance = LiveAppearanceProcessor.create(
+                    prepared.slots.map {
+                        LiveAppearanceProcessor.SourceFrame(it.bgr, it.width, it.height)
+                    },
+                )?.also { it.activeSource = liveSourceIndex }
                 null
             }
             if (startError != null) {
                 liveNote = startError
                 NativePipe.release(); PipeGuard.release(); return@launch
             }
+            live.output.processor = appearance
             liveRunning = true
             // NaN is LiveEngine's documented "do not run the content checker" sentinel.
             // Keep it explicit here so a reused LiveEngine can never retain an older real
             // threshold and stop the camera/RTSP pump on an ordinary facial movement.
             live.gateThreshold = Float.NaN
-            live.start(this@MainActivity, this@MainActivity) { shot ->
+            live.start(applicationContext, liveOwner) { shot ->
                 // The analyzer thread hands the result straight to Compose state, which is
                 // safe for snapshot state and avoids a per-frame main-thread post.
                 if (shot.error != null) liveNote = shot.error
@@ -3626,6 +3721,7 @@ class MainActivity : ComponentActivity() {
                     liveFrame = shot.bitmap
                     liveFaces = shot.faces
                     liveFps = shot.fps
+                    PersistentLiveService.updateFrame(shot.bitmap, liveMirror)
                 }
                 // A pending assignment tap resolves on the frame after it was queued;
                 // this callback runs on the analyzer thread that liveFrame just ran on,
@@ -3673,6 +3769,8 @@ class MainActivity : ComponentActivity() {
         finishLiveRecording(discard = false)
         stopLiveStreaming()
         liveRunning = false
+        live.output.processor = null
+        PersistentLiveService.updateFrame(null, liveMirror)
         NativePipe.setTrackPeriod(0)
         // Assignments die with the pipeline the engine is about to release; the UI state
         // around them goes with them so a stale box or count cannot outlive the session.

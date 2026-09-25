@@ -130,6 +130,9 @@ fun LiveScreen(
     streamStatus: String? = null,
     streamUrl: String = "rtsp://127.0.0.1:8554/live",
     onToggleStream: () -> Unit = {},
+    /** Keep the one Live engine running behind a clean, draggable system overlay. */
+    persistent: Boolean = false,
+    onTogglePersistent: () -> Unit = {},
 ) {
     var cleanFullscreen by rememberSaveable { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -514,6 +517,13 @@ fun LiveScreen(
             Text(stringResource(R.string.live_fullscreen))
         }
 
+        OutlinedButton(
+            onClick = onTogglePersistent,
+            enabled = running || persistent,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (persistent) "Persistent rectangle: On" else "Persistent rectangle")
+        }
 
         OutlinedButton(
             onClick = onToggleStream,
